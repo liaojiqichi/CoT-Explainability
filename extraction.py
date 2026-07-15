@@ -5,6 +5,8 @@ Representation Extraction
 import torch
 import torch.nn.functional as F
 import numpy as np
+import pickle
+import os
 
 from generation import *
 
@@ -46,46 +48,50 @@ def attention_rollout(attentions):
 
     return all_rollout
 
-
 @torch.no_grad()
-def forward(full_text):
+def forward(
+    full_text,
+    return_inputs=True,
+    return_outputs=True,
+):
 
     inputs = tokenizer(
-
         full_text,
-
         return_tensors="pt"
-
     ).to(DEVICE)
 
     outputs = model(
-
         **inputs,
-
         output_hidden_states=True,
-
         output_attentions=True,
-
-        use_cache=False
-
+        use_cache=False,
+        return_dict=True
     )
 
-    return inputs,outputs
+    if return_inputs and return_outputs:
+        return inputs, outputs
 
+    elif return_outputs:
+        return outputs
+
+    return inputs
 
 def extract_hidden(outputs):
 
-    hidden=[]
+    return np.stack(
 
-    for h in outputs.hidden_states:
-
-        hidden.append(
+        [
 
             h[0].cpu().numpy()
 
-        )
+            for h in outputs.hidden_states
 
-    return hidden
+        ],
+
+        axis=0
+
+    )
+
 
 def extract_last_hidden(outputs):
 
@@ -150,6 +156,7 @@ def extract_entropy(outputs):
 
     return entropy.cpu().numpy()
 
+
 def extract_attention(outputs):
 
     return [
@@ -159,6 +166,7 @@ def extract_attention(outputs):
         for x in outputs.attentions
 
     ]
+    
 def extract_rollout(outputs):
 
     return attention_rollout(
@@ -167,9 +175,11 @@ def extract_rollout(outputs):
 
     )
 
+
 def extract_ids(inputs):
 
     return inputs.input_ids[0].cpu().numpy()
+
 
 def extract_tokens(inputs):
 
@@ -247,34 +257,120 @@ def layer_embedding_matrix(outputs):
     return np.stack(mat)
 
 
-def extract_everything(full_text):
 
-    inputs,outputs = forward(full_text)
+def extract_from_outputs(inputs, outputs):
 
-    return {
+    signals = {}
 
-        "ids":extract_ids(inputs),
+    signals["ids"] = extract_ids(inputs)
 
-        "tokens":extract_tokens(inputs),
+    signals["tokens"] = extract_tokens(inputs)
 
-        "hidden":extract_hidden(outputs),
+    signals["last_hidden"] = np.stack(
 
-        "last_hidden":extract_last_hidden(outputs),
+        extract_last_hidden(outputs),
 
-        "token_hidden":extract_token_hidden(outputs),
+        axis=0
 
-        "probability":extract_probability(outputs),
+    )
 
-        "entropy":extract_entropy(outputs),
+    signals["layer_matrix"] = signals["last_hidden"]
 
-        "attention":extract_attention(outputs),
+    signals["hidden"] = np.stack(
 
-        "rollout":extract_rollout(outputs),
+        extract_hidden(outputs),
 
-        "logits":extract_logits(outputs),
+        axis=0
 
-        "logit_lens":extract_logit_lens(outputs),
+    )
 
-        "layer_matrix":layer_embedding_matrix(outputs)
+    signals["token_hidden"] = signals["hidden"]
 
-    }
+    signals["probability"] = extract_probability(outputs)
+
+    signals["entropy"] = extract_entropy(outputs)
+
+    signals["attention"] = extract_attention(outputs)
+
+    signals["rollout"] = extract_rollout(outputs)
+
+    signals["logits"] = extract_logits(outputs)
+
+    signals["logit_lens"] = extract_logit_lens(outputs)
+
+    return signals
+
+
+def cache_signal(
+
+    signal,
+
+    cache_path
+
+):
+
+    with open(
+
+        cache_path,
+
+        "wb"
+
+    ) as f:
+
+        pickle.dump(
+
+            signal,
+
+            f,
+
+            protocol=pickle.HIGHEST_PROTOCOL
+
+        )
+
+def extract_everything(
+
+        full_text,
+
+        cache_path=None,
+
+        overwrite=False
+
+):
+
+    if (
+
+        cache_path is not None
+
+        and
+
+        os.path.exists(cache_path)
+
+        and
+
+        not overwrite
+
+    ):
+
+        return load_signal(cache_path)
+
+    inputs, outputs = forward(full_text)
+
+    signals = extract_from_outputs(
+
+        inputs,
+
+        outputs
+
+    )
+
+    if cache_path is not None:
+
+        cache_signal(
+
+            signals,
+
+            cache_path
+
+        )
+
+    return signals
